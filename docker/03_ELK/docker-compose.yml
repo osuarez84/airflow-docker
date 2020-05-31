@@ -1,0 +1,135 @@
+version: '3.6'
+
+x-common-config: &common-config
+  restart: unless-stopped
+
+x-airflow-template: &airflow-template
+  <<: *common-config
+  image: apache/airflow:master
+  volumes:
+    - ${DAGS_FOLDER}:/opt/airflow/dags
+  environment:
+    - AIRFLOW__CORE__FERNET_KEY
+    - AIRFLOW__CORE__DEFAULT_TIMEZONE
+    - AIRFLOW__CORE__EXECUTOR
+    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION
+    - AIRFLOW__CORE__LOAD_EXAMPLES
+    - AIRFLOW__CORE__PARALLELISM
+    - AIRFLOW__CORE__DAG_CONCURRENCY
+    - AIRFLOW__CORE__MAX_ACTIVE_RUNS
+    - AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG
+    - AIRFLOW__CORE__SQL_ALCHEMY_POOL_SIZE
+    - AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE
+    - AIRFLOW__WEBSERVER__EXPOSE_CONFIG
+    - AIRFLOW__WEBSERVER__NAVBAR_COLOR
+    - AIRFLOW__WEBSERVER__DEFAULT_DAG_RUN_DISPLAY_NUMBER
+    - AIRFLOW__CELERY__BROKER_URL
+    - AIRFLOW__CELERY__WORKER_AUTOSCALE
+    - AIRFLOW__ADMIN__HIDE_SENSITIVE_VARIABLE_FIELDS
+    - AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT
+    - AIRFLOW__CORE__SQL_ALCHEMY_CONN
+    - AIRFLOW__CELERY__RESULT_BACKEND
+    - AIRFLOW__WEBSERVER__FILTER_BY_OWNER
+    - POSTGRES_PASSWORD
+    - POSTGRES_USER
+    - POSTGRES_DB
+
+
+services:
+
+  redis:
+    <<: *common-config
+    image: redis:5.0.8-alpine
+    healthcheck:
+      test: redis-cli ping
+
+  database:
+    <<: *common-config
+    image: postgres
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+      - PGDATA
+    ports:
+      - 5432:5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data/pgdata
+  
+
+  webserver:
+    <<: *airflow-template
+    depends_on:
+      - database
+    command: webserver
+    ports:
+      - ${AIRFLOW_PORT}:8080
+    healthcheck:
+      test: curl --fail-early --fail http://webserver:${AIRFLOW_PORT}/health
+      start_period: 2m
+
+  scheduler:
+    <<: *airflow-template
+    depends_on:
+      - database
+      - redis
+    command: scheduler
+
+  worker:
+    <<: *airflow-template
+    depends_on:
+      - scheduler
+    command: celery worker
+
+  flower:
+    <<: *airflow-template
+    depends_on:
+      - scheduler
+    command: celery flower
+    ports:
+      - ${FLOWER_PORT}:5555
+
+
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.5.2
+    restart: always
+    depends_on: 
+      - worker
+    environment: 
+      ES_JAVA_OPTS: "-Xmx256m -Xms256m"
+      discovery.type: single-node
+    ports:
+      - 9200:9200
+      - 9300:9300
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.5.2
+    restart: always
+    depends_on:
+      - elasticsearch
+    volumes:
+      - ./mnt/kibana/kibana.yml:/usr/share/kibana/config/kibana.yml
+    environment: 
+      ELASTICSEARCH_HOSTS: http:elasticsearch:9200
+      SERVER_HOST: "0.0.0.0"
+    ports:
+      - 5601:5601
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.5.2
+    restart: always
+    depends_on: 
+      - elasticsearch
+    volumes:
+      - ./mnt/logstash/pipeline:/usr/share/logstash/pipeline
+
+  
+
+secrets:
+  sql_service_account:
+    file: ${SERVICE_ACCOUNT_KEY}
+
+volumes:
+  pgdata: 
+    driver: local

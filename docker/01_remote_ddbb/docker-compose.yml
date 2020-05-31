@@ -1,0 +1,88 @@
+version: '3.6'
+
+x-common-config: &common-config
+  restart: unless-stopped
+
+x-airflow-template: &airflow-template
+  <<: *common-config
+  image: apache/airflow:master
+  volumes:
+    - ${DAGS_FOLDER}:/opt/airflow/dags
+  environment:
+    - AIRFLOW__CORE__FERNET_KEY
+    - AIRFLOW__CORE__DEFAULT_TIMEZONE
+    - AIRFLOW__CORE__EXECUTOR
+    - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION
+    - AIRFLOW__CORE__LOAD_EXAMPLES
+    - AIRFLOW__CORE__PARALLELISM
+    - AIRFLOW__CORE__DAG_CONCURRENCY
+    - AIRFLOW__CORE__MAX_ACTIVE_RUNS
+    - AIRFLOW__CORE__MAX_ACTIVE_RUNS_PER_DAG
+    - AIRFLOW__CORE__SQL_ALCHEMY_POOL_SIZE
+    - AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE
+    - AIRFLOW__WEBSERVER__EXPOSE_CONFIG
+    - AIRFLOW__WEBSERVER__NAVBAR_COLOR
+    - AIRFLOW__WEBSERVER__DEFAULT_DAG_RUN_DISPLAY_NUMBER
+    - AIRFLOW__CELERY__BROKER_URL
+    - AIRFLOW__CELERY__WORKER_AUTOSCALE
+    - AIRFLOW__ADMIN__HIDE_SENSITIVE_VARIABLE_FIELDS
+    - AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT
+    - AIRFLOW__CORE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+    - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}
+    - AIRFLOW__WEBSERVER__FILTER_BY_OWNER
+
+services:
+
+  redis:
+    <<: *common-config
+    image: redis:5.0.8-alpine
+    healthcheck:
+      test: redis-cli ping
+
+  database:
+    <<: *common-config
+    image: gcr.io/cloudsql-docker/gce-proxy:1.17
+    secrets:
+      - sql_service_account
+    environment:
+      - INSTANCES=${INSTANCE_CONNECTION_NAME}=tcp:0.0.0.0:${DB_PORT}
+      - GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/sql_service_account
+    command: '/cloud_sql_proxy -refresh_config_throttle=10s'
+    ports:
+      - ${DB_PORT}:${DB_PORT}
+
+  webserver:
+    <<: *airflow-template
+    depends_on:
+      - database
+    command: webserver
+    ports:
+      - ${AIRFLOW_PORT}:8080
+    healthcheck:
+      test: curl --fail-early --fail http://webserver:${AIRFLOW_PORT}/health
+      start_period: 2m
+
+  scheduler:
+    <<: *airflow-template
+    depends_on:
+      - database
+      - redis
+    command: scheduler
+
+  worker:
+    <<: *airflow-template
+    depends_on:
+      - scheduler
+    command: celery worker
+
+  flower:
+    <<: *airflow-template
+    depends_on:
+      - scheduler
+    command: celery flower
+    ports:
+      - ${FLOWER_PORT}:5555
+
+secrets:
+  sql_service_account:
+    file: ${SERVICE_ACCOUNT_KEY}
