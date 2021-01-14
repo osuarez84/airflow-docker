@@ -24,6 +24,7 @@ We will use also a proxy to secure and scale the connections between the differe
 
 These are the steps to configure Airflow to work with Traefik:
 - Configure the file `acme.json` and created it before start
+- Give permissions 600 to the `acme.json` file
 - Configure the domain name, for a free approach use `duckdns.org`
 
 
