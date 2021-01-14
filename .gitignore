@@ -4,3 +4,7 @@ airflow/
 .DS_Store
 __pycache__/
 .env
+.terraform
+terraform.tfstate
+terraform.tfstate.backup
+.terraform*
